@@ -17,6 +17,7 @@
 #include <iostream>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -27,12 +28,11 @@
 
 #if defined(__APPLE__)
 #include <mach/mach_time.h>
-#include <netinet/tcp.h>
 #else
 #include <sys/sysinfo.h>
 #endif
 
-#define APP_VERSION  "0.1.0"
+#define APP_VERSION  "0.1.1"
 #define MSG_PING "ping"
 #define MSG_ECHO "echo"
 #define MSG_QUIT "quit"
@@ -51,7 +51,9 @@ static int64_t getNanoTime() {
     mach_timebase_info(&info);
     return (int64_t)(mach_absolute_time() * info.numer / info.denom);
 }
+
 #else
+static const int64_t kNanosPerSecond = 1000 * 1000 * 1000;
 static int64_t getNanoTime() {
     struct timespec res;
     int result = clock_gettime(CLOCK_MONOTONIC, &res);
@@ -179,7 +181,13 @@ protected:
     socklen_t mSourceAddressLength = sizeof(mSourceAddress);
     
     int mSocketFD = -1; // for listening to incoming TCP connections, or sending UDP packets
+#if 0
+    // Requires C++14
     std::atomic<int> mLocalPort{0};
+#else
+    volatile int mLocalPort = 0;
+#endif
+
     bool mConnected = false;
 };
 
@@ -397,7 +405,7 @@ public:
 struct TestParams {
     const char *remoteAddressPort = nullptr;
     int numPings = 100;
-    bool localMode = true;
+    bool localMode = false;
     bool useTCP = false;
     bool sendQuit = false;
     
@@ -518,12 +526,19 @@ public:
     double getAveragePingDuration() {
         return (mPingDurationCount == 0) ? -1.0 : mPingDurationSum / mPingDurationCount;
     }
-    
+
     /**
-     * @return average duration of the round trip ping in milliseconds
+     * @return maximum duration of the round trip ping in milliseconds
      */
     double getMaximumPingDuration() {
         return mPingDurationMax;
+    }
+
+    /**
+     * @return minimum duration of the round trip ping in milliseconds
+     */
+    double getMinimumPingDuration() {
+        return mPingDurationMin;
     }
     
     int sendPing() {
@@ -561,6 +576,7 @@ public:
                     std::cout << "got echo after " << elapsedMsec << " msec" << std::endl;
                     mPingDurationSum += elapsedMsec;
                     mPingDurationCount++;
+                    mPingDurationMin = std::min(mPingDurationMin, elapsedMsec);
                     mPingDurationMax = std::max(mPingDurationMax, elapsedMsec);
                 }
             }
@@ -612,6 +628,7 @@ public:
         
         std::cout << "Client finished." << std::endl;
         std::cout << "ping.average.msec = " << getAveragePingDuration() << std::endl;
+        std::cout << "ping.min.msec = " << getMinimumPingDuration() << std::endl;
         std::cout << "ping.max.msec = " << getMaximumPingDuration() << std::endl;
         std::cout << "network.protocol = " << (testParams->useTCP ? "TCP" : "UDP") << std::endl;
         
@@ -652,6 +669,7 @@ public:
 private:
     NetworkSocketBase *mNetWorkSocket;
     int64_t mPingTime = 0;
+    double mPingDurationMin = 1.0e12;
     double mPingDurationMax = -1.0;
     double mPingDurationSum = 0.0;
     int mPingDurationCount = 0;
